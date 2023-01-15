@@ -62,6 +62,10 @@ class VulkanEngine {
     VkRenderPass               _renderPass;
     std::vector<VkFramebuffer> _framebuffers;
 
+    VkImageView                _depthImageView;
+    AllocatedImage             _depthImage;
+    VkFormat                   _depthFormat;
+
     VkSemaphore                _presentSemaphore, _renderSemaphore;
     VkFence                    _renderFence;
 
@@ -72,6 +76,7 @@ class VulkanEngine {
     VkPipelineLayout           _meshPipelineLayout;
     VkPipeline                 _meshPipeline;
     Mesh                       _triangleMesh;
+    Mesh                       _monkeyMesh;
 
     int                        _selectedShader{0};
 
@@ -113,12 +118,14 @@ class PipelineBuilder {
     VkPipelineRasterizationStateCreateInfo       _rasterizer;
     VkPipelineColorBlendAttachmentState          _colorBlendAttachment;
     VkPipelineMultisampleStateCreateInfo         _multisampling;
+    VkPipelineDepthStencilStateCreateInfo        _depthStencil;
     VkPipelineLayout                             _pipelineLayout;
 
     VkPipeline                                   build_pipeline(VkDevice device, VkRenderPass pass);
 };
 
 struct MeshPushConstants {
-    glm::vec4 data;
-    glm::mat4 render_matrix;
+    alignas(16) glm::vec4 resolution_and_mouse;
+    alignas(16) glm::vec4 ticks;
+    alignas(16) glm::mat4 render_matrix;
 };

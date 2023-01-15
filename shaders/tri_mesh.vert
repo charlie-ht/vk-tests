@@ -9,7 +9,8 @@ layout (location = 0) out vec3 outColor;
 //push constants block
 layout( push_constant ) uniform constants
 {
-	vec4 data;
+	vec4 resolution_and_mouse;
+	vec4 ticks;
 	mat4 render_matrix;
 } PushConstants;
 
