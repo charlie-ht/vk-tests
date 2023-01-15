@@ -8,20 +8,6 @@
 			"targets": [
 				"all"
 			],
-			"problemMatcher": {
-				"fileLocation": [
-					"relative",
-					"${workspaceFolder}"
-				],
-				"pattern": {
-					"regexp": "^(ERROR: )(.*):(\\d+):(\\d+):\\s+(.*)$",
-					"file": 2,
-					"line": 3,
-					"column": 4,
-					"severity": 1,
-					"message": 5
-				}
-			},
 			"group": {
 				"kind": "build",
 				"isDefault": true

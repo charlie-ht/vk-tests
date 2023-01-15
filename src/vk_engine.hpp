@@ -1,6 +1,9 @@
 #pragma once
 
+#include "glm/glm.hpp"
+#include "vk_mesh.hpp"
 #include "vk_types.hpp"
+
 #include <deque>
 #include <functional>
 #include <vector>
@@ -28,6 +31,8 @@ class VulkanEngine {
     VkExtent2D                 _windowExtent{1700, 900};
 
     struct SDL_Window*         _window{nullptr};
+
+    VmaAllocator               _allocator;
 
     DeletionQueue              _mainDeletionQueue;
 
@@ -64,6 +69,10 @@ class VulkanEngine {
     VkPipeline                 _trianglePipeline;
     VkPipeline                 _redTrianglePipeline;
 
+    VkPipelineLayout           _meshPipelineLayout;
+    VkPipeline                 _meshPipeline;
+    Mesh                       _triangleMesh;
+
     int                        _selectedShader{0};
 
     // initializes everything in the engine
@@ -89,6 +98,9 @@ class VulkanEngine {
     void init_framebuffers();
     void init_sync_structures();
     void init_pipelines();
+
+    void load_meshes();
+    void upload_mesh(Mesh& mesh);
 };
 
 class PipelineBuilder {
@@ -104,4 +116,9 @@ class PipelineBuilder {
     VkPipelineLayout                             _pipelineLayout;
 
     VkPipeline                                   build_pipeline(VkDevice device, VkRenderPass pass);
+};
+
+struct MeshPushConstants {
+    glm::vec4 data;
+    glm::mat4 render_matrix;
 };

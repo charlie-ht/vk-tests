@@ -4,4 +4,8 @@
     "editor.formatOnSave": true,
     "C_Cpp.codeAnalysis.clangTidy.enabled": true,
     "C_Cpp.codeAnalysis.clangTidy.codeAction.formatFixes": true,
+    "files.associations": {
+        "iostream": "cpp",
+        "ostream": "cpp"
+    },
 }
