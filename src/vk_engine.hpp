@@ -6,6 +6,8 @@
 
 #include <deque>
 #include <functional>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 struct DeletionQueue {
@@ -24,76 +26,103 @@ struct DeletionQueue {
     }
 };
 
+struct Material {
+    VkPipeline       pipeline;
+    VkPipelineLayout pipelineLayout;
+};
+
+struct RenderObject {
+    Mesh*     mesh;
+    Material* material;
+
+    glm::mat4 transformMatrix;
+};
 class VulkanEngine {
   public:
-    bool                       _isInitialized{false};
-    int                        _frameNumber{0};
-    VkExtent2D                 _windowExtent{1700, 900};
+    bool                                      _isInitialized{false};
+    int                                       _frameNumber{0};
+    VkExtent2D                                _windowExtent{1700, 900};
 
-    struct SDL_Window*         _window{nullptr};
+    struct SDL_Window*                        _window{nullptr};
 
-    VmaAllocator               _allocator;
+    VmaAllocator                              _allocator;
 
-    DeletionQueue              _mainDeletionQueue;
+    DeletionQueue                             _mainDeletionQueue;
 
-    VkInstance                 _instance;
-    VkDebugUtilsMessengerEXT   _debug_messenger; // Vulkan debug output handle
-    VkPhysicalDevice           _chosenGPU;       // GPU chosen as the default device
-    VkDevice                   _device;          // Vulkan device for commands
-    VkSurfaceKHR               _surface;         // Vulkan window surface
+    VkInstance                                _instance;
+    VkDebugUtilsMessengerEXT                  _debug_messenger; // Vulkan debug output handle
+    VkPhysicalDevice                          _chosenGPU;       // GPU chosen as the default device
+    VkDevice                                  _device;          // Vulkan device for commands
+    VkSurfaceKHR                              _surface;         // Vulkan window surface
 
-    VkSwapchainKHR             _swapchain; // from other articles
+    VkSwapchainKHR                            _swapchain; // from other articles
 
     // image format expected by the windowing system
-    VkFormat                   _swapchainImageFormat;
+    VkFormat                                  _swapchainImageFormat;
 
     // array of images from the swapchain
-    std::vector<VkImage>       _swapchainImages;
+    std::vector<VkImage>                      _swapchainImages;
 
     // array of image-views from the swapchain
-    std::vector<VkImageView>   _swapchainImageViews;
+    std::vector<VkImageView>                  _swapchainImageViews;
 
-    VkQueue                    _graphicsQueue;       // queue we will submit to
-    uint32_t                   _graphicsQueueFamily; // family of that queue
+    VkQueue                                   _graphicsQueue;       // queue we will submit to
+    uint32_t                                  _graphicsQueueFamily; // family of that queue
 
-    VkCommandPool              _commandPool;       // the command pool for our commands
-    VkCommandBuffer            _mainCommandBuffer; // the buffer we will record into
+    VkCommandPool                             _commandPool;       // the command pool for our commands
+    VkCommandBuffer                           _mainCommandBuffer; // the buffer we will record into
 
-    VkRenderPass               _renderPass;
-    std::vector<VkFramebuffer> _framebuffers;
+    VkRenderPass                              _renderPass;
+    std::vector<VkFramebuffer>                _framebuffers;
 
-    VkImageView                _depthImageView;
-    AllocatedImage             _depthImage;
-    VkFormat                   _depthFormat;
+    VkImageView                               _depthImageView;
+    AllocatedImage                            _depthImage;
+    VkFormat                                  _depthFormat;
 
-    VkSemaphore                _presentSemaphore, _renderSemaphore;
-    VkFence                    _renderFence;
+    VkSemaphore                               _presentSemaphore, _renderSemaphore;
+    VkFence                                   _renderFence;
 
-    VkPipelineLayout           _trianglePipelineLayout;
-    VkPipeline                 _trianglePipeline;
-    VkPipeline                 _redTrianglePipeline;
+    std::vector<RenderObject>                 _renderables;
+    std::unordered_map<std::string, Material> _materials;
+    std::unordered_map<std::string, Mesh>     _meshes;
 
-    VkPipelineLayout           _meshPipelineLayout;
-    VkPipeline                 _meshPipeline;
-    Mesh                       _triangleMesh;
-    Mesh                       _monkeyMesh;
+    VkPipelineLayout                          _trianglePipelineLayout;
+    VkPipeline                                _trianglePipeline;
+    VkPipeline                                _redTrianglePipeline;
 
-    int                        _selectedShader{0};
+    VkPipelineLayout                          _meshPipelineLayout;
+    VkPipeline                                _meshPipeline;
+    Mesh                                      _triangleMesh;
+    Mesh                                      _monkeyMesh;
+
+    int                                       _selectedShader{0};
 
     // initializes everything in the engine
-    void                       init();
+    void                                      init();
 
     // shuts down the engine
-    void                       cleanup();
+    void                                      cleanup();
 
     // draw loop
-    void                       draw();
+    void                                      draw();
 
     // run main loop
-    void                       run();
+    void                                      run();
 
     // loads a shader module from a spir-v file. Returns false if it errors
-    bool                       load_shader_module(const char* filePath, VkShaderModule* outShaderModule);
+    bool                                      load_shader_module(const char* filePath, VkShaderModule* outShaderModule);
+
+    // create material and add it to the map
+    Material* create_material(VkPipeline pipeline, VkPipelineLayout layout, const std::string& name);
+
+    // returns nullptr if it can't be found
+    Material* get_material(const std::string& name);
+
+    // returns nullptr if it can't be found
+    Mesh*     get_mesh(const std::string& name);
+
+    // our draw function
+    void      draw_objects(VkCommandBuffer cmd, RenderObject* first, int count);
 
   private:
     void init_vulkan();
@@ -103,8 +132,8 @@ class VulkanEngine {
     void init_framebuffers();
     void init_sync_structures();
     void init_pipelines();
-
     void load_meshes();
+    void init_scene();
     void upload_mesh(Mesh& mesh);
 };
 
