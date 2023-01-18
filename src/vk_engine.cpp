@@ -9,13 +9,14 @@
 #include "VkBootstrap.h"
 #include "glm/gtx/transform.hpp"
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wnullability-completeness"
-#define VMA_IMPLEMENTATION
+#include "stb_image_write.h"
 #include "vk_mem_alloc.h"
-#pragma clang diagnostic pop
 
 #include <iostream>
+#include <string_view>
+#include <unistd.h>
+
+#include <unistd.h>
 
 #define VK_CHECK(x)                                                                                                    \
     do {                                                                                                               \
@@ -25,8 +26,93 @@
         }                                                                                                              \
     } while (0)
 
-void VulkanEngine::init()
+EngineOptions VulkanEngine::parse_options(int argc, char** argv)
 {
+    EngineOptions            options;
+
+    std::vector<std::string> args;
+    args.assign(argv + 1, argv + argc);
+
+    struct OptionParsed {
+        bool             isShort;
+        bool             isLong;
+        std::string      original;
+        std::string_view name;
+        std::string_view value;
+    };
+
+    auto parse_arg = [=](std::string rawOpt) {
+        OptionParsed p;
+        p.original = rawOpt;
+        if (p.original.starts_with("--")) {
+            p.isShort = false;
+            p.isLong = true;
+            if (auto eqPosition = p.original.find('='); eqPosition != std::string_view::npos) {
+                p.name = p.original.substr(2, eqPosition - 2);
+                p.value = p.original.substr(eqPosition + 1);
+            }
+            else {
+                p.name = p.original.substr(2);
+            }
+        }
+        else if (rawOpt.starts_with("-")) {
+            p.isShort = true;
+            p.isLong = false;
+            p.name = p.original.substr(1);
+        }
+        return p;
+    };
+
+    auto caseInsensitiveCompare = [](std::string_view a, std::string_view b) {
+        return std::equal(a.begin(), a.end(), b.begin(),
+                          [](char a, char b) { return std::toupper(a) == std::toupper(b); });
+    };
+    auto parseBool = [=](const std::string_view val) {
+        if (val.length() == 0) {
+            return false;
+        }
+        if (caseInsensitiveCompare(val, "true") || caseInsensitiveCompare(val, "1") ||
+            caseInsensitiveCompare(val, "on")) {
+            return true;
+        }
+        else if (caseInsensitiveCompare(val, "false") || caseInsensitiveCompare(val, "0") ||
+                 caseInsensitiveCompare(val, "off")) {
+            return false;
+        }
+
+        abort();
+        return false;
+    };
+
+    for (const auto& arg : args) {
+        const auto& opt = parse_arg(arg);
+        if (opt.name == "validation") {
+            options.enableValidation = parseBool(opt.value);
+        }
+        else if (opt.name == "sync-validation") {
+            options.enableSyncValidation = parseBool(opt.value);
+        }
+        else if (opt.name == "best-practices-validation") {
+            options.enableBestPracticesValidation = parseBool(opt.value);
+        }
+    }
+
+    return options;
+}
+
+void VulkanEngine::init(int argc, char** argv)
+{
+    _parsedOptions = parse_options(argc, argv);
+    if (_parsedOptions.enableValidation) {
+        std::cout << "Validation enabled" << std::endl;
+    }
+    if (_parsedOptions.enableSyncValidation) {
+        std::cout << "Sync validation enabled" << std::endl;
+    }
+    if (_parsedOptions.enableBestPracticesValidation) {
+        std::cout << "Best practises validation enabled" << std::endl;
+    }
+
     // We initialize SDL and create a window with it.
     SDL_Init(SDL_INIT_VIDEO);
 
@@ -54,7 +140,22 @@ inline VKAPI_ATTR VkBool32 VKAPI_CALL eugene_debug_callback(VkDebugUtilsMessageS
 {
     auto ms = vkb::to_string_message_severity(messageSeverity);
     auto mt = vkb::to_string_message_type(messageType);
+
+    // Don't need to be told this, it's obvious when I'm running debug builds.
+    if (strstr(pCallbackData->pMessage, "VK_EXT_debug_utils")) {
+        return VK_FALSE;
+    }
+    // Don't need to be told this, it's obvious when I'm running debug builds.
+    if (strstr(pCallbackData->pMessage,
+               "Using debug builds of the validation layers *will* adversely affect performance")) {
+        return VK_FALSE;
+    }
+
     printf("[%s: %s]\n%s\n", ms, mt, pCallbackData->pMessage);
+
+    if (messageSeverity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        abort();
+    }
 
     return VK_FALSE; // Applications must return false here
 }
@@ -63,12 +164,18 @@ void VulkanEngine::init_vulkan()
 {
     vkb::InstanceBuilder builder;
     // make the Vulkan instance, with basic debug features
-    builder.set_app_name("Eugene Rendering Experiment")
-        .request_validation_layers(true)
-        .require_api_version(1, 3, 0)
-        .enable_extension(
-            "VK_KHR_get_physical_device_properties2") // VK_KHR_dynamic_rendering requires this instance ext.
-        .set_debug_callback(eugene_debug_callback);
+    builder.set_app_name("Vulkan Experiment");
+
+    if (_parsedOptions.enableValidation) {
+        builder.request_validation_layers(true).set_debug_callback(eugene_debug_callback);
+    }
+    if (_parsedOptions.enableSyncValidation) {
+        builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT);
+    }
+    if (_parsedOptions.enableBestPracticesValidation) {
+        builder.add_validation_feature_enable(VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT);
+    }
+    builder.require_api_version(1, 3, 0);
 
     auto system_info_ret = vkb::SystemInfo::get_system_info();
     if (!system_info_ret) {
@@ -76,8 +183,7 @@ void VulkanEngine::init_vulkan()
         abort();
     }
 
-    auto          inst_ret = builder.build();
-    vkb::Instance vkb_inst = inst_ret.value();
+    vkb::Instance vkb_inst = builder.build().value();
     // store the instance
     _instance = vkb_inst.instance;
     // store the debug messenger
@@ -89,16 +195,15 @@ void VulkanEngine::init_vulkan()
     // We want a GPU that can write to the SDL surface and supports Vulkan 1.3
     vkb::PhysicalDeviceSelector selector{vkb_inst};
     selector.set_minimum_version(1, 3).set_surface(_surface);
-    selector.add_required_extension("VK_KHR_depth_stencil_resolve"); // Dependency of VK_KHR_dynamic_rendering
-    selector.add_required_extension("VK_KHR_dynamic_rendering");
 
     vkb::PhysicalDevice                      physicalDevice = selector.select().value();
 
     // create the final Vulkan device
     vkb::DeviceBuilder                       deviceBuilder{physicalDevice};
 
-    VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures = {
-        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
+    VkPhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures = {};
+    dynamicRenderingFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES;
+    dynamicRenderingFeatures.pNext = nullptr;
     dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
     deviceBuilder.add_pNext(&dynamicRenderingFeatures);
 
@@ -126,13 +231,18 @@ void VulkanEngine::init_swapchain()
 {
     vkb::SwapchainBuilder swapchainBuilder{_chosenGPU, _device, _surface};
 
-    vkb::Swapchain        vkbSwapchain = swapchainBuilder
-                                      .use_default_format_selection()
-                                      // use vsync present mode
-                                      .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
-                                      .set_desired_extent(_windowExtent.width, _windowExtent.height)
-                                      .build()
-                                      .value();
+    vkb::Swapchain        vkbSwapchain =
+        swapchainBuilder
+            .use_default_format_selection()
+            // use vsync present mode
+            .set_desired_format(VkSurfaceFormatKHR{VK_FORMAT_R8G8B8A8_UINT, VK_COLOR_SPACE_EXTENDED_SRGB_NONLINEAR_EXT})
+            .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+            .set_desired_extent(_windowExtent.width, _windowExtent.height)
+            .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+            .build()
+            .value();
+
+    fprintf(stderr, "Swapchain format %d\n", vkbSwapchain.image_format);
 
     // store swapchain and its related images
     _swapchain = vkbSwapchain.swapchain;
@@ -143,14 +253,92 @@ void VulkanEngine::init_swapchain()
 
     _mainDeletionQueue.push_function([=]() { vkDestroySwapchainKHR(_device, _swapchain, nullptr); });
 
+    // create the multisample image (where the fragment shader will be invoked multiple times per pixel, and these
+    // extra samples recorded in the this image)
+    VkExtent3D        msImageExtent = {_windowExtent.width, _windowExtent.height, 1};
+
+    // The multi-sample image needs xfer-src since it will be the src when copying to the resolved, single-sample,
+    // color buffer. Perhaps after average this sub-pixel samples, for example.
+    VkImageCreateInfo msImageInfo = vkinit::image_create_info(
+        _swapchainImageFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, msImageExtent,
+        _sampleCount);
+
+    VmaAllocationCreateInfo msimgAllocinfo = {};
+    msimgAllocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    msimgAllocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    // allocate and create the image
+    vmaCreateImage(_allocator, &msImageInfo, &msimgAllocinfo, &_msImage._image, &_msImage._allocation, nullptr);
+
+    // build an image-view for the multisample image to use for rendering
+    VkImageViewCreateInfo msViewInfo =
+        vkinit::imageview_create_info(_swapchainImageFormat, _msImage._image, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VK_CHECK(vkCreateImageView(_device, &msViewInfo, nullptr, &_msImageView));
+
+    // add to deletion queues
+    _mainDeletionQueue.push_function([=]() {
+        vkDestroyImageView(_device, _msImageView, nullptr);
+        vmaDestroyImage(_allocator, _msImage._image, _msImage._allocation);
+    });
+    // end creation of multisample image
+
+    // Create an intermediate image to resolve into. This will be copied to the resolveCheckBuffer below,
+    // and later copied to the swapchain image for presentation
+
+    VkImageCreateInfo resolveImageInfo = vkinit::image_create_info(
+        _swapchainImageFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, msImageExtent,
+        VK_SAMPLE_COUNT_1_BIT);
+
+    VmaAllocationCreateInfo resolveImgAllocinfo = {};
+    resolveImgAllocinfo.flags =
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    resolveImgAllocinfo.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+    resolveImgAllocinfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    // allocate and create the image
+    vmaCreateImage(_allocator, &resolveImageInfo, &resolveImgAllocinfo, &_resolveImage._image,
+                   &_resolveImage._allocation, nullptr);
+
+    // build an image-view for the multisample image to use for rendering
+    VkImageViewCreateInfo resolveViewInfo =
+        vkinit::imageview_create_info(_swapchainImageFormat, _resolveImage._image, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    VK_CHECK(vkCreateImageView(_device, &resolveViewInfo, nullptr, &_resolveImageView));
+
+    // add to deletion queues
+    _mainDeletionQueue.push_function([=]() {
+        vkDestroyImageView(_device, _resolveImageView, nullptr);
+        vmaDestroyImage(_allocator, _resolveImage._image, _resolveImage._allocation);
+    });
+    // End of intermediate image creation
+
+    // create a buffer to hold the temporary state of the MS image
+    VkBufferCreateInfo bufferCreateInfo = {};
+    bufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferCreateInfo.pNext = nullptr;
+    bufferCreateInfo.flags = 0u;
+    bufferCreateInfo.size = _windowExtent.width * _windowExtent.height * 4;
+    bufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    bufferCreateInfo.queueFamilyIndexCount = 0u;
+    bufferCreateInfo.pQueueFamilyIndices = nullptr;
+    VmaAllocationCreateInfo bufferAllocInfo = {};
+    bufferAllocInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+    bufferAllocInfo.requiredFlags = VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    vmaCreateBuffer(_allocator, &bufferCreateInfo, &bufferAllocInfo, &_resolveCheckBuffer._buffer,
+                    &_resolveCheckBuffer._allocation, nullptr);
+    // end buffer creation code
+
     // depth image size will match the window
     VkExtent3D depthImageExtent = {_windowExtent.width, _windowExtent.height, 1};
     // hardcoding the depth format to 32 bit float
     _depthFormat = VK_FORMAT_D32_SFLOAT;
 
     // the depth image will be an image with the format we selected and Depth Attachment usage flag
-    VkImageCreateInfo dimg_info =
-        vkinit::image_create_info(_depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImageExtent);
+    VkImageCreateInfo dimg_info = vkinit::image_create_info(_depthFormat, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+                                                            depthImageExtent, _sampleCount);
 
     // for the depth image, we want to allocate it from GPU local memory
     VmaAllocationCreateInfo dimg_allocinfo = {};
@@ -168,6 +356,7 @@ void VulkanEngine::init_swapchain()
 
     // add to deletion queues
     _mainDeletionQueue.push_function([=]() {
+        vmaDestroyBuffer(_allocator, _resolveCheckBuffer._buffer, _resolveCheckBuffer._allocation);
         for (const auto& iview : _swapchainImageViews) {
             vkDestroyImageView(_device, iview, nullptr);
         }
@@ -179,8 +368,7 @@ void VulkanEngine::init_swapchain()
 void VulkanEngine::init_commands()
 {
     // create a command pool for commands submitted to the graphics queue.
-    VkCommandPoolCreateInfo commandPoolInfo =
-        vkinit::command_pool_create_info(_graphicsQueueFamily, VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT);
+    VkCommandPoolCreateInfo commandPoolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
     VK_CHECK(vkCreateCommandPool(_device, &commandPoolInfo, nullptr, &_commandPool));
 
     // allocate the default command buffer that we will use for rendering
@@ -198,8 +386,8 @@ void VulkanEngine::init_sync_structures()
     fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     fenceCreateInfo.pNext = nullptr;
 
-    // we want to create the fence with the Create Signaled flag, so we can wait on it before using it on a GPU command
-    // (for the first frame)
+    // we want to create the fence with the Create Signaled flag, so we can wait on it before using it on a GPU
+    // command (for the first frame)
     fenceCreateInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
     VK_CHECK(vkCreateFence(_device, &fenceCreateInfo, nullptr, &_renderFence));
@@ -226,7 +414,8 @@ void VulkanEngine::init_pipelines()
     // compile colored triangle modules
     VkShaderModule triangleFragShader;
     if (!load_shader_module("../../shaders/colored_triangle.frag.spv", &triangleFragShader)) {
-        std::cout << "Error when building the triangle fragment shader module" << std::endl;
+        std::cerr << "Error when building the triangle fragment shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Triangle fragment shader successfully loaded" << std::endl;
@@ -234,7 +423,8 @@ void VulkanEngine::init_pipelines()
 
     VkShaderModule triangleVertexShader;
     if (!load_shader_module("../../shaders/colored_triangle.vert.spv", &triangleVertexShader)) {
-        std::cout << "Error when building the triangle vertex shader module" << std::endl;
+        std::cerr << "Error when building the triangle vertex shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Triangle vertex shader successfully loaded" << std::endl;
@@ -243,7 +433,8 @@ void VulkanEngine::init_pipelines()
     // compile red triangle modules
     VkShaderModule redTriangleFragShader;
     if (!load_shader_module("../../shaders/triangle.frag.spv", &redTriangleFragShader)) {
-        std::cout << "Error when building the triangle fragment shader module" << std::endl;
+        std::cerr << "Error when building the triangle fragment shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Red Triangle fragment shader successfully loaded" << std::endl;
@@ -251,7 +442,8 @@ void VulkanEngine::init_pipelines()
 
     VkShaderModule redTriangleVertShader;
     if (!load_shader_module("../../shaders/triangle.vert.spv", &redTriangleVertShader)) {
-        std::cout << "Error when building the triangle vertex shader module" << std::endl;
+        std::cerr << "Error when building the triangle vertex shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Red Triangle vertex shader successfully loaded" << std::endl;
@@ -259,14 +451,16 @@ void VulkanEngine::init_pipelines()
 
     VkShaderModule meshVertShader;
     if (!load_shader_module("../../shaders/tri_mesh.vert.spv", &meshVertShader)) {
-        std::cout << "Error when building the mesh triangle vertex shader module" << std::endl;
+        std::cerr << "Error when building the mesh triangle vertex shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Mesh Triangle vertex shader successfully loaded" << std::endl;
     }
     VkShaderModule meshFragShader;
     if (!load_shader_module("../../shaders/tri_mesh.frag.spv", &meshFragShader)) {
-        std::cout << "Error when building the mesh triangle fragment shader module" << std::endl;
+        std::cerr << "Error when building the mesh triangle fragment shader module" << std::endl;
+        abort();
     }
     else {
         std::cout << "Mesh Triangle fragment shader successfully loaded" << std::endl;
@@ -278,8 +472,8 @@ void VulkanEngine::init_pipelines()
 
     VK_CHECK(vkCreatePipelineLayout(_device, &pipeline_layout_info, nullptr, &_trianglePipelineLayout));
 
-    // build the stage-create-info for both vertex and fragment stages. This lets the pipeline know the shader modules
-    // per stage
+    // build the stage-create-info for both vertex and fragment stages. This lets the pipeline know the shader
+    // modules per stage
     PipelineBuilder pipelineBuilder;
 
     pipelineBuilder._depthStencil = vkinit::depth_stencil_create_info(VK_TRUE, VK_TRUE, VK_COMPARE_OP_LESS_OR_EQUAL);
@@ -312,7 +506,7 @@ void VulkanEngine::init_pipelines()
     pipelineBuilder._rasterizer = vkinit::rasterization_state_create_info(VK_POLYGON_MODE_FILL);
 
     // we don't use multisampling, so just run the default one
-    pipelineBuilder._multisampling = vkinit::multisampling_state_create_info();
+    pipelineBuilder._multisampling = vkinit::multisampling_state_create_info(_sampleCount);
 
     // a single blend attachment with no blending and writing to RGBA
     pipelineBuilder._colorBlendAttachment = vkinit::color_blend_attachment_state();
@@ -417,8 +611,8 @@ void VulkanEngine::load_meshes()
     upload_mesh(_triangleMesh);
     upload_mesh(_monkeyMesh);
 
-    // note that we are copying them. Eventually we will delete the hardcoded _monkey and _triangle meshes, so it's no
-    // problem now.
+    // note that we are copying them. Eventually we will delete the hardcoded _monkey and _triangle meshes, so it's
+    // no problem now.
     _meshes["monkey"] = _monkeyMesh;
     _meshes["triangle"] = _triangleMesh;
 }
@@ -486,8 +680,8 @@ void VulkanEngine::cleanup()
         _mainDeletionQueue.flush();
 
         vkDestroySurfaceKHR(_instance, _surface, nullptr);
-        vkDestroyDevice(_device, nullptr);
         vkb::destroy_debug_utils_messenger(_instance, _debug_messenger);
+        vkDestroyDevice(_device, nullptr);
         vkDestroyInstance(_instance, nullptr);
 
         SDL_DestroyWindow(_window);
@@ -495,22 +689,118 @@ void VulkanEngine::cleanup()
     SDL_DestroyWindow(_window);
 }
 
+VkImageMemoryBarrier make_image_barrier(VkImage image, VkAccessFlags srcAccessMask, VkAccessFlags dstAccessMask,
+                                        VkImageLayout srcLayout, VkImageLayout dstLayout)
+{
+    VkImageMemoryBarrier barrier = {};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.srcAccessMask = srcAccessMask;
+    barrier.dstAccessMask = dstAccessMask;
+    barrier.oldLayout = srcLayout;
+    barrier.newLayout = dstLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.baseMipLevel = 0;
+    barrier.subresourceRange.levelCount = 1;
+    return barrier;
+}
+
+void copyColorImageToBuffer(VkCommandBuffer cmd, VkImage image, uint32_t width, uint32_t height, VkBuffer buffer)
+{
+    VkImageMemoryBarrier imageBarrier =
+        make_image_barrier(image, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0u, 0u,
+                         nullptr, 0u, nullptr, 1u, &imageBarrier);
+
+    VkImageSubresourceLayers subresource = {};
+    subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresource.mipLevel = 0u;
+    subresource.baseArrayLayer = 0u;
+    subresource.layerCount = 1u;
+
+    VkBufferImageCopy region = {};
+    region.bufferOffset = 0ull;
+    region.bufferRowLength = 0u;
+    region.bufferImageHeight = 0u;
+    region.imageSubresource = subresource;
+    region.imageOffset = VkOffset3D{0u, 0u, 0u};
+    region.imageExtent = VkExtent3D{width, height, 1u};
+
+    vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &region);
+
+    imageBarrier = make_image_barrier(image, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0u, 0u,
+                         nullptr, 0u, nullptr, 1u, &imageBarrier);
+}
+
+void copyColorImageToSwapchainImage(VkCommandBuffer cmd, VkImage resolvedImage, uint32_t width, uint32_t height,
+                                    VkImage swapchainImage)
+{
+    VkImageSubresourceLayers subresource;
+    subresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    subresource.mipLevel = 0u;
+    subresource.baseArrayLayer = 0u;
+    subresource.layerCount = 1u;
+
+    VkImageCopy imageCopy = {};
+    imageCopy.srcSubresource = subresource;
+    imageCopy.srcOffset = VkOffset3D{0u, 0u, 0u};
+    imageCopy.dstSubresource = subresource;
+    imageCopy.dstOffset = VkOffset3D{0u, 0u, 0u};
+    imageCopy.extent = VkExtent3D{width, height, 1u};
+
+    auto swapchainImageMemoryBarrier =
+        make_image_barrier(swapchainImage, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &swapchainImageMemoryBarrier);
+
+    auto resolveImageMemoryBarrier =
+        make_image_barrier(resolvedImage, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &resolveImageMemoryBarrier);
+
+    vkCmdCopyImage(cmd, resolvedImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, swapchainImage,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageCopy);
+
+    resolveImageMemoryBarrier =
+        make_image_barrier(resolvedImage, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &resolveImageMemoryBarrier);
+
+    swapchainImageMemoryBarrier =
+        make_image_barrier(swapchainImage, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &swapchainImageMemoryBarrier);
+}
+
 void VulkanEngine::draw()
 {
     // wait until the GPU has finished rendering the last frame. Timeout of 1 second
     VK_CHECK(vkWaitForFences(_device, 1, &_renderFence, true, 1000000000));
+
     VK_CHECK(vkResetFences(_device, 1, &_renderFence));
     // request image from the swapchain, one second timeout
     uint32_t swapchainImageIndex;
     VK_CHECK(vkAcquireNextImageKHR(_device, _swapchain, 1000000000, _presentSemaphore, nullptr, &swapchainImageIndex));
     // now that we are sure that the commands finished executing, we can safely reset the command buffer to begin
     // recording again.
-    VK_CHECK(vkResetCommandBuffer(_mainCommandBuffer, 0));
-    // naming it cmd for shorter writing
+    VK_CHECK(vkResetCommandPool(_device, _commandPool, 0));
+    // VK_CHECK(vkResetCommandBuffer(_mainCommandBuffer, 0));
+    //  naming it cmd for shorter writing
     VkCommandBuffer          cmd = _mainCommandBuffer;
 
-    // begin the command buffer recording. We will use this command buffer exactly once, so we want to let Vulkan know
-    // that
+    // begin the command buffer recording. We will use this command buffer exactly once, so we want to let Vulkan
+    // know that
     VkCommandBufferBeginInfo cmdBeginInfo = {};
     cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     cmdBeginInfo.pNext = nullptr;
@@ -527,60 +817,53 @@ void VulkanEngine::draw()
     VkClearValue depthClear;
     depthClear.depthStencil.depth = 1.0f;
 
-    VkClearValue              clearValues[] = {clearValue, depthClear};
-
     // start the main renderpass.
-    VkRenderingAttachmentInfo colorAttachmentInfo = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    colorAttachmentInfo.imageView = _swapchainImageViews[swapchainImageIndex];
-    colorAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachmentInfo.resolveMode = VK_RESOLVE_MODE_NONE;
-    colorAttachmentInfo.resolveImageView = VK_NULL_HANDLE;
-    colorAttachmentInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachmentInfo.clearValue = clearValue;
+    VkRenderingAttachmentInfo colorAttachmentInfo = {};
 
-    VkRenderingAttachmentInfo depthAttachmentInfo = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-    depthAttachmentInfo.imageView = _depthImageView;
-    depthAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    depthAttachmentInfo.resolveMode = VK_RESOLVE_MODE_NONE;
-    depthAttachmentInfo.resolveImageView = VK_NULL_HANDLE;
-    depthAttachmentInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachmentInfo.clearValue = depthClear;
+    if (_sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+        colorAttachmentInfo =
+            vkinit::create_resolve_attachment(_msImageView, VK_RESOLVE_MODE_AVERAGE_BIT, _resolveImageView, clearValue);
+    }
+    else {
+        colorAttachmentInfo = vkinit::create_color_attachment(_msImageView, clearValue);
+    }
+    VkRenderingAttachmentInfo depthAttachmentInfo = vkinit::create_depth_attachment(_depthImageView, depthClear);
 
-    VkRenderingInfo renderingInfo = {VK_STRUCTURE_TYPE_RENDERING_INFO};
+    VkRenderingAttachmentInfo colorAttachments[1] = {colorAttachmentInfo};
+
+    VkRenderingInfo           renderingInfo = {};
+    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.flags = 0;
-    renderingInfo.renderArea.offset.x = 0;
-    renderingInfo.renderArea.offset.y = 0;
-    renderingInfo.renderArea.extent = _windowExtent;
+    renderingInfo.renderArea = {{0, 0}, _windowExtent};
     renderingInfo.layerCount = 1;
     renderingInfo.viewMask = 0;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachments = &colorAttachmentInfo;
+    renderingInfo.colorAttachmentCount = SDL_arraysize(colorAttachments);
+    renderingInfo.pColorAttachments = colorAttachments;
     renderingInfo.pDepthAttachment = &depthAttachmentInfo;
     renderingInfo.pStencilAttachment = nullptr;
 
-    VkImageMemoryBarrier swapchainImageMemoryBarrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    swapchainImageMemoryBarrier.srcAccessMask = 0;
-    swapchainImageMemoryBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    swapchainImageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    swapchainImageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    swapchainImageMemoryBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    swapchainImageMemoryBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    swapchainImageMemoryBarrier.image = _swapchainImages[swapchainImageIndex];
-    swapchainImageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    swapchainImageMemoryBarrier.subresourceRange.baseArrayLayer = 0;
-    swapchainImageMemoryBarrier.subresourceRange.layerCount = 1;
-    swapchainImageMemoryBarrier.subresourceRange.baseMipLevel = 0;
-    swapchainImageMemoryBarrier.subresourceRange.levelCount = 1;
-
+    // Pre-barriers, get resources in the right state for drawing.
+    VkImageMemoryBarrier swapchainImageMemoryBarrier =
+        make_image_barrier(_swapchainImages[swapchainImageIndex], 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
                          nullptr, 0, nullptr, 1, &swapchainImageMemoryBarrier);
 
+    VkImageMemoryBarrier resolveImageMemoryBarrier =
+        make_image_barrier(_resolveImage._image, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &resolveImageMemoryBarrier);
+
+    VkImageMemoryBarrier msImageMemoryBarrier =
+        make_image_barrier(_msImage._image, 0, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0,
+                         nullptr, 0, nullptr, 1, &msImageMemoryBarrier);
+    // End of pre barriers
+
     vkCmdBeginRendering(cmd, &renderingInfo);
-    // vkCmdBeginRenderPass(cmd, &rpInfo, VK_SUBPASS_CONTENTS_INLINE);
+
     if (_selectedShader == 0) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, _trianglePipeline);
         vkCmdDraw(cmd, 3, 1, 0, 0);
@@ -631,14 +914,24 @@ void VulkanEngine::draw()
     // finalize the render pass
     vkCmdEndRendering(cmd);
 
-    swapchainImageMemoryBarrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    swapchainImageMemoryBarrier.dstAccessMask = 0;
-    swapchainImageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    swapchainImageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
-                         nullptr, 0, nullptr, 1, &swapchainImageMemoryBarrier);
+    if (_sampleCount != VK_SAMPLE_COUNT_1_BIT) {
+        copyColorImageToBuffer(cmd, _resolveImage._image, _windowExtent.width, _windowExtent.height,
+                               _resolveCheckBuffer._buffer);
 
-    // vkCmdEndRenderPass(cmd);
+        copyColorImageToSwapchainImage(cmd, _resolveImage._image, _windowExtent.width, _windowExtent.height,
+                                       _swapchainImages[swapchainImageIndex]);
+    }
+    else {
+        copyColorImageToSwapchainImage(cmd, _msImage._image, _windowExtent.width, _windowExtent.height,
+                                       _swapchainImages[swapchainImageIndex]);
+    }
+
+    swapchainImageMemoryBarrier = make_image_barrier(
+        _swapchainImages[swapchainImageIndex], VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                         nullptr, 1, &swapchainImageMemoryBarrier);
+
     //  finalize the command buffer (we can no longer add commands, but it can now be executed)
     VK_CHECK(vkEndCommandBuffer(cmd));
 
@@ -784,7 +1077,9 @@ bool VulkanEngine::load_shader_module(const char* filePath, VkShaderModule* outS
     assert(rc == size_t(length));
     fclose(file);
 
-    VkShaderModuleCreateInfo createInfo = {VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModuleCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.pNext = nullptr;
     createInfo.codeSize = length;
     createInfo.pCode = reinterpret_cast<const uint32_t*>(buffer);
 
@@ -824,7 +1119,8 @@ VkPipeline PipelineBuilder::build_pipeline(VkDevice device, VkFormat swapchainFo
 
     // build the actual pipeline
     // we now use all of the info structs we have been writing into into this one to create the pipeline
-    VkPipelineRenderingCreateInfo pipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    VkPipelineRenderingCreateInfo pipelineRenderingCreateInfo = {};
+    pipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     pipelineRenderingCreateInfo.viewMask = 0;
     pipelineRenderingCreateInfo.colorAttachmentCount = 1;
     pipelineRenderingCreateInfo.pColorAttachmentFormats = &swapchainFormat;
@@ -849,7 +1145,8 @@ VkPipeline PipelineBuilder::build_pipeline(VkDevice device, VkFormat swapchainFo
     pipelineInfo.subpass = 0;
     pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
-    // it's easy to error out on create graphics pipeline, so we handle it a bit better than the common VK_CHECK case
+    // it's easy to error out on create graphics pipeline, so we handle it a bit better than the common VK_CHECK
+    // case
     VkPipeline newPipeline;
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &newPipeline) != VK_SUCCESS) {
         fprintf(stderr, "failed to create pipeline\n");
@@ -885,3 +1182,5 @@ Mesh* VulkanEngine::get_mesh(const std::string& name)
     }
     return nullptr;
 }
+
+EngineOptions parse_options(int argc, char** argv);

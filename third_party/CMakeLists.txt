@@ -3,7 +3,7 @@ find_package(Vulkan REQUIRED)
 add_library(vkbootstrap STATIC)
 add_library(glm INTERFACE)
 add_library(vma INTERFACE)
-#add_library(stb_image INTERFACE)
+add_library(stb INTERFACE)
 
 add_library(tinyobjloader STATIC)
 
@@ -23,3 +23,4 @@ target_include_directories(tinyobjloader PUBLIC tinyobjloader)
 
 target_include_directories(glm INTERFACE glm/)
 target_include_directories(vma INTERFACE vma/include)
+target_include_directories(stb INTERFACE stb/)

@@ -182,7 +182,7 @@ VkPipelineRasterizationStateCreateInfo vkinit::rasterization_state_create_info(V
 
     return info;
 }
-VkPipelineMultisampleStateCreateInfo vkinit::multisampling_state_create_info()
+VkPipelineMultisampleStateCreateInfo vkinit::multisampling_state_create_info(VkSampleCountFlagBits sampleCount)
 {
     VkPipelineMultisampleStateCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
@@ -190,7 +190,7 @@ VkPipelineMultisampleStateCreateInfo vkinit::multisampling_state_create_info()
 
     info.sampleShadingEnable = VK_FALSE;
     // multisampling defaulted to no multisampling (1 sample per pixel)
-    info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    info.rasterizationSamples = sampleCount;
     info.minSampleShading = 1.0f;
     info.pSampleMask = nullptr;
     info.alphaToCoverageEnable = VK_FALSE;
@@ -220,7 +220,8 @@ VkPipelineLayoutCreateInfo vkinit::pipeline_layout_create_info()
     return info;
 }
 
-VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent)
+VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent,
+                                            VkSampleCountFlagBits samples)
 {
     VkImageCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -233,7 +234,7 @@ VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags u
 
     info.mipLevels = 1;
     info.arrayLayers = 1;
-    info.samples = VK_SAMPLE_COUNT_1_BIT;
+    info.samples = samples;
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usageFlags;
 
@@ -275,4 +276,52 @@ VkPipelineDepthStencilStateCreateInfo vkinit::depth_stencil_create_info(bool bDe
     info.stencilTestEnable = VK_FALSE;
 
     return info;
+}
+
+VkRenderingAttachmentInfo vkinit::create_color_attachment(VkImageView imageView, VkClearValue clearValue,
+                                                          VkImageLayout layout)
+{
+
+    VkRenderingAttachmentInfo colorAttachmentInfo = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    colorAttachmentInfo.imageView = imageView;
+    colorAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachmentInfo.resolveMode = VK_RESOLVE_MODE_NONE;
+    colorAttachmentInfo.resolveImageView = VK_NULL_HANDLE;
+    colorAttachmentInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachmentInfo.clearValue = clearValue;
+
+    return colorAttachmentInfo;
+}
+
+VkRenderingAttachmentInfo vkinit::create_resolve_attachment(VkImageView imageView, VkResolveModeFlagBits resolveMode,
+                                                            VkImageView resolveImageView, VkClearValue clearValue,
+                                                            VkImageLayout layout)
+{
+    VkRenderingAttachmentInfo resolveAttachmentInfo = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    resolveAttachmentInfo.imageView = imageView;
+    resolveAttachmentInfo.imageLayout = layout;
+    resolveAttachmentInfo.resolveMode = resolveMode;
+    resolveAttachmentInfo.resolveImageView = resolveImageView;
+    resolveAttachmentInfo.resolveImageLayout = layout;
+    resolveAttachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    resolveAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    resolveAttachmentInfo.clearValue = clearValue;
+    return resolveAttachmentInfo;
+}
+
+VkRenderingAttachmentInfo vkinit::create_depth_attachment(VkImageView depthImageView, VkClearValue depthClear)
+{
+    VkRenderingAttachmentInfo depthAttachmentInfo = {VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    depthAttachmentInfo.imageView = depthImageView;
+    depthAttachmentInfo.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depthAttachmentInfo.resolveMode = VK_RESOLVE_MODE_NONE;
+    depthAttachmentInfo.resolveImageView = VK_NULL_HANDLE;
+    depthAttachmentInfo.resolveImageLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachmentInfo.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachmentInfo.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachmentInfo.clearValue = depthClear;
+
+    return depthAttachmentInfo;
 }

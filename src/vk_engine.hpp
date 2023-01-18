@@ -26,6 +26,13 @@ struct DeletionQueue {
     }
 };
 
+struct EngineOptions {
+    bool                  enableValidation{true};
+    bool                  enableSyncValidation{true};
+    bool                  enableBestPracticesValidation{true};
+    VkSampleCountFlagBits msaaSamples{VK_SAMPLE_COUNT_1_BIT};
+};
+
 struct Material {
     VkPipeline       pipeline;
     VkPipelineLayout pipelineLayout;
@@ -40,6 +47,7 @@ struct RenderObject {
 class VulkanEngine {
   public:
     bool                                      _isInitialized{false};
+    EngineOptions                             _parsedOptions;
     int                                       _frameNumber{0};
     VkExtent2D                                _windowExtent{1700, 900};
 
@@ -55,7 +63,7 @@ class VulkanEngine {
     VkDevice                                  _device;          // Vulkan device for commands
     VkSurfaceKHR                              _surface;         // Vulkan window surface
 
-    VkSwapchainKHR                            _swapchain; // from other articles
+    VkSwapchainKHR                            _swapchain;       // from other articles
 
     // image format expected by the windowing system
     VkFormat                                  _swapchainImageFormat;
@@ -69,8 +77,18 @@ class VulkanEngine {
     VkQueue                                   _graphicsQueue;       // queue we will submit to
     uint32_t                                  _graphicsQueueFamily; // family of that queue
 
-    VkCommandPool                             _commandPool;       // the command pool for our commands
-    VkCommandBuffer                           _mainCommandBuffer; // the buffer we will record into
+    VkCommandPool                             _commandPool;         // the command pool for our commands
+    VkCommandBuffer                           _mainCommandBuffer;   // the buffer we will record into
+
+    VkSampleCountFlagBits                     _sampleCount = _parsedOptions.msaaSamples;
+    VkImageView                               _msImageView;
+    AllocatedImage                            _msImage;
+    // The format is the sample as the swapchain color format
+
+    VkImageView                               _resolveImageView;
+    AllocatedImage                            _resolveImage;
+
+    AllocatedBuffer                           _resolveCheckBuffer;
 
     VkImageView                               _depthImageView;
     AllocatedImage                            _depthImage;
@@ -95,7 +113,7 @@ class VulkanEngine {
     int                                       _selectedShader{0};
 
     // initializes everything in the engine
-    void                                      init();
+    void                                      init(int argc, char** argv);
 
     // shuts down the engine
     void                                      cleanup();
@@ -122,14 +140,16 @@ class VulkanEngine {
     void      draw_objects(VkCommandBuffer cmd, RenderObject* first, int count);
 
   private:
-    void init_vulkan();
-    void init_swapchain();
-    void init_commands();
-    void init_sync_structures();
-    void init_pipelines();
-    void load_meshes();
-    void init_scene();
-    void upload_mesh(Mesh& mesh);
+    EngineOptions parse_options(int argc, char** argv);
+
+    void          init_vulkan();
+    void          init_swapchain();
+    void          init_commands();
+    void          init_sync_structures();
+    void          init_pipelines();
+    void          load_meshes();
+    void          init_scene();
+    void          upload_mesh(Mesh& mesh);
 };
 
 class PipelineBuilder {
