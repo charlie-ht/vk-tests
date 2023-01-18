@@ -72,9 +72,6 @@ class VulkanEngine {
     VkCommandPool                             _commandPool;       // the command pool for our commands
     VkCommandBuffer                           _mainCommandBuffer; // the buffer we will record into
 
-    VkRenderPass                              _renderPass;
-    std::vector<VkFramebuffer>                _framebuffers;
-
     VkImageView                               _depthImageView;
     AllocatedImage                            _depthImage;
     VkFormat                                  _depthFormat;
@@ -128,8 +125,6 @@ class VulkanEngine {
     void init_vulkan();
     void init_swapchain();
     void init_commands();
-    void init_default_renderpass();
-    void init_framebuffers();
     void init_sync_structures();
     void init_pipelines();
     void load_meshes();
@@ -150,7 +145,7 @@ class PipelineBuilder {
     VkPipelineDepthStencilStateCreateInfo        _depthStencil;
     VkPipelineLayout                             _pipelineLayout;
 
-    VkPipeline                                   build_pipeline(VkDevice device, VkRenderPass pass);
+    VkPipeline build_pipeline(VkDevice device, VkFormat swapchainFormat, VkFormat depthFormat);
 };
 
 struct MeshPushConstants {
